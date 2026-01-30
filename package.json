@@ -1,0 +1,23 @@
+{
+  "name": "practice-interviews-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for Practice Interviews using Playwright",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:local": "BASE_URL=http://localhost:3000 playwright test",
+    "test:e2e:stage": "BASE_URL=https://stage.practiceinterviews.com playwright test",
+    "test:e2e:prod": "BASE_URL=https://app.practiceinterviews.com playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:firefox": "playwright test --project=firefox",
+    "test:e2e:webkit": "playwright test --project=webkit",
+    "test:report": "playwright show-report",
+    "test:codegen": "playwright codegen"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/node": "^22.0.0"
+  }
+}

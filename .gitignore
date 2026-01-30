@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Test outputs
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Build outputs
+dist/
+
+# Environment files (credentials should be in CI secrets)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
