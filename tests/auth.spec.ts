@@ -84,10 +84,23 @@ test.describe('Authentication - Login Flow', () => {
     await page.getByLabel('Password').fill(TEST_PASSWORD!);
     await page.getByRole('button', { name: 'Sign In' }).click();
 
-    // Step 4: Verify we reach the home page or dashboard
-    // The app might redirect to onboarding or home depending on user state
+    // Step 4: Handle trial expired modal if it appears
+    // The modal shows "Your free trial has ended, but don't stop practicing!"
+    const trialModalTitle = page.getByText('Your free trial has ended', { exact: false });
+    const isModalVisible = await trialModalTitle.isVisible().catch(() => false);
+    if (isModalVisible) {
+      // Close the modal by pressing ESC
+      await page.keyboard.press('Escape');
+      // Wait for modal to close
+      await expect(trialModalTitle).not.toBeVisible({ timeout: 3000 });
+    }
+
+    // Step 5: Verify we reach the home page or dashboard
+    // Use a more specific locator - the welcome heading (h4 element)
+    // This avoids strict mode violations from multiple "Welcome" or "Practice" text matches
+    // The error shows the heading is: <h4>Welcome, E2E Test!</h4>
     await expect(
-      page.getByText('Welcome').or(page.getByText('Practice'))
+      page.locator('h4').filter({ hasText: /Welcome.*E2E Test/i }).first()
     ).toBeVisible({ timeout: 15000 });
 
     // Verify URL is no longer on auth pages
@@ -109,9 +122,10 @@ test.describe('Authentication - Login Flow', () => {
     await page.getByRole('button', { name: 'Sign In' }).click();
 
     // Should show an error toast
-    // The exact message depends on the backend, but there should be some error indication
+    // Use a more specific locator for the toast body that's actually visible
+    // The toast body has role="alert" and contains the error message
     await expect(
-      page.getByRole('alert').or(page.locator('.Toastify'))
+      page.getByRole('alert').filter({ hasText: /Invalid|incorrect|wrong|error/i })
     ).toBeVisible({ timeout: 5000 });
   });
 
