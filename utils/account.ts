@@ -93,13 +93,22 @@ async function createPassword(page: Page, password: string): Promise<void> {
   await expect(confirmPasswordInput).toBeVisible({ timeout: 5000 });
   await confirmPasswordInput.fill(password);
 
+  // Wait a moment for form validation
+  await page.waitForTimeout(500);
+
   // Click "Create account" button
   const createAccountBtn = page.getByRole('button', { name: /create account/i });
   await expect(createAccountBtn).toBeVisible({ timeout: 5000 });
+  await expect(createAccountBtn).toBeEnabled({ timeout: 5000 });
   await createAccountBtn.click();
 
-  // Wait for account creation to complete and navigate to field/role selection
-  await expect(page).toHaveURL(/onboarding-field-role/, { timeout: 15000 });
+  // Wait for account creation API call to complete and navigation
+  // The button shows "Creating account..." when loading, then navigates on success
+  // Wait for navigation away from create-account page (should go to field/role)
+  await expect(page).not.toHaveURL(/onboarding-create-account/, { timeout: 20000 });
+  
+  // Verify we're on the field/role page
+  await expect(page).toHaveURL(/onboarding-field-role/, { timeout: 5000 });
 }
 
 /**

@@ -239,6 +239,7 @@ test.describe('Rate Limit - Account Creation', () => {
 
     // Verify we're logged in
     await page.goto('/home');
-    await expect(page.getByText(/Welcome/)).toBeVisible({ timeout: 15000 });
+    // Use first() to handle multiple "Welcome" text matches, or use a more specific selector
+    await expect(page.getByText(/Welcome/).first()).toBeVisible({ timeout: 15000 });
   });
 });
