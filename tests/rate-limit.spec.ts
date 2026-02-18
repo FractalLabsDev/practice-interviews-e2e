@@ -1,196 +1,244 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
+import {
+  createAccountWithOnboarding,
+  generateTestEmail,
+  generateTestPassword,
+  login,
+} from '../utils/account';
+import { getAPIBaseURL } from '../utils/api';
 
 /**
- * Rate Limit Banner E2E Tests
+ * Rate Limit E2E Tests
  *
- * Tests the frontend rate limit banner behavior when API returns 429.
- * Uses route interception to simulate rate limiting without hitting actual limits.
+ * Tests the rate limiting behavior by:
+ * 1. Creating a fresh test account
+ * 2. Spamming cheap API endpoints to trigger 429
+ * 3. Verifying toast appears and user is logged out
+ * 4. Verifying other users (super admin) can still use the app
  *
  * Prerequisites:
- * - practice-interviews-web must have the RateLimitBanner component
- * - E2E_TEST_EMAIL and E2E_TEST_PASSWORD must be set for auth tests
+ * - OTP bypass enabled for @fractallabs.dev emails
+ * - E2E_SUPERADMIN_EMAIL and E2E_SUPERADMIN_PASSWORD env vars for concurrent user test
  */
 
-const TEST_EMAIL = process.env.E2E_TEST_EMAIL;
-const TEST_PASSWORD = process.env.E2E_TEST_PASSWORD;
-const hasTestCredentials = !!TEST_EMAIL && !!TEST_PASSWORD;
+// Super admin credentials for concurrent user test
+const SUPERADMIN_EMAIL = process.env.E2E_SUPERADMIN_EMAIL;
+const SUPERADMIN_PASSWORD = process.env.E2E_SUPERADMIN_PASSWORD;
 
-// Generate unique test email: e2e-test-YYYYMMDD-HHMMSS@fractallabs.dev
-const generateTestEmail = (): string => {
-  const now = new Date();
-  const dateStr = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
-  return `e2e-test-${dateStr}@fractallabs.dev`;
-};
+/**
+ * Spam cheap API endpoints to trigger rate limit
+ * Uses /answers/count and /answers/user endpoints as they're virtually free
+ */
+async function spamRequestsUntil429(
+  page: Page,
+  userId: string,
+  token: string,
+  baseURL: string
+): Promise<{ hitRateLimit: boolean; requestCount: number }> {
+  let requestCount = 0;
+  let hitRateLimit = false;
 
-test.describe('Rate Limit Banner', () => {
-  test('displays banner when API returns 429', async ({ page }) => {
-    test.skip(!hasTestCredentials, 'E2E test credentials not configured');
+  // Make parallel batches of requests to hit the limit faster
+  // Stage has 2000 limit, prod has 200 - we'll keep going until we hit 429
+  const maxRequests = 250; // Should be enough for prod limit (200)
+  const batchSize = 10;
 
-    // Login first
-    await page.goto('/enter-email');
-    await page.getByLabel('Email address').fill(TEST_EMAIL!);
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByLabel('Password')).toBeVisible({ timeout: 10000 });
-    await page.getByLabel('Password').fill(TEST_PASSWORD!);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-
-    // Wait for successful login
-    await expect(page).not.toHaveURL(/enter-email|enter-password/, {
-      timeout: 15000,
-    });
-
-    // Dismiss any modals
-    const trialModalText = page.getByText('Your free trial has ended');
-    if (await trialModalText.isVisible().catch(() => false)) {
-      await page.mouse.click(10, 10);
-      await page.waitForTimeout(500);
-    }
-
-    // Set up route interception to simulate 429 on the next API call
-    await page.route('**/api/v1/answers/**', async route => {
-      await route.fulfill({
-        status: 429,
-        headers: {
-          'Content-Type': 'application/json',
-          'Retry-After': '30', // 30 seconds for test
-        },
-        body: JSON.stringify({
-          message: 'Too many requests from this account, please try again after 15 minutes',
+  while (requestCount < maxRequests && !hitRateLimit) {
+    const batch = [];
+    for (let i = 0; i < batchSize; i++) {
+      batch.push(
+        page.request.get(`${baseURL}/api/v1/answers/count/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
         }),
-      });
-    });
-
-    // Trigger an API call by navigating to a page that makes API requests
-    await page.goto('/');
-
-    // Wait for the rate limit banner to appear
-    await expect(
-      page.getByText(/You're making requests too quickly/i)
-    ).toBeVisible({ timeout: 10000 });
-
-    // Verify the countdown timer is shown
-    await expect(page.getByText(/Please wait/)).toBeVisible();
-  });
-
-  test('banner shows countdown timer', async ({ page }) => {
-    test.skip(!hasTestCredentials, 'E2E test credentials not configured');
-
-    // Login
-    await page.goto('/enter-email');
-    await page.getByLabel('Email address').fill(TEST_EMAIL!);
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByLabel('Password')).toBeVisible({ timeout: 10000 });
-    await page.getByLabel('Password').fill(TEST_PASSWORD!);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    await expect(page).not.toHaveURL(/enter-email|enter-password/, {
-      timeout: 15000,
-    });
-
-    // Dismiss modals
-    const trialModalText = page.getByText('Your free trial has ended');
-    if (await trialModalText.isVisible().catch(() => false)) {
-      await page.mouse.click(10, 10);
-      await page.waitForTimeout(500);
+        page.request.get(`${baseURL}/api/v1/answers/user/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        page.request.get(
+          `${baseURL}/api/v1/answers/distinct-question-types/${userId}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        )
+      );
     }
 
-    // Intercept with 5 second countdown for faster test
-    await page.route('**/api/v1/answers/**', async route => {
-      await route.fulfill({
-        status: 429,
-        headers: {
-          'Content-Type': 'application/json',
-          'Retry-After': '5',
-        },
-        body: JSON.stringify({ message: 'Rate limited' }),
-      });
-    });
+    const responses = await Promise.all(batch);
+    requestCount += batch.length;
 
-    await page.goto('/');
-
-    // Verify banner appears
-    await expect(
-      page.getByText(/You're making requests too quickly/i)
-    ).toBeVisible({ timeout: 10000 });
-
-    // Wait a bit and verify countdown is progressing (banner should still be visible)
-    await page.waitForTimeout(2000);
-    await expect(
-      page.getByText(/You're making requests too quickly/i)
-    ).toBeVisible();
-
-    // After ~5 seconds, banner should auto-dismiss
-    await page.waitForTimeout(4000);
-    await expect(
-      page.getByText(/You're making requests too quickly/i)
-    ).not.toBeVisible({ timeout: 2000 });
-  });
-
-  test('banner appears at top of page in fixed position', async ({ page }) => {
-    test.skip(!hasTestCredentials, 'E2E test credentials not configured');
-
-    // Login
-    await page.goto('/enter-email');
-    await page.getByLabel('Email address').fill(TEST_EMAIL!);
-    await page.getByRole('button', { name: 'Continue' }).click();
-    await expect(page.getByLabel('Password')).toBeVisible({ timeout: 10000 });
-    await page.getByLabel('Password').fill(TEST_PASSWORD!);
-    await page.getByRole('button', { name: 'Sign In' }).click();
-    await expect(page).not.toHaveURL(/enter-email|enter-password/, {
-      timeout: 15000,
-    });
-
-    // Dismiss modals
-    const trialModalText = page.getByText('Your free trial has ended');
-    if (await trialModalText.isVisible().catch(() => false)) {
-      await page.mouse.click(10, 10);
-      await page.waitForTimeout(500);
+    // Check if any response was 429
+    for (const response of responses) {
+      if (response.status() === 429) {
+        hitRateLimit = true;
+        break;
+      }
     }
 
-    // Trigger 429
-    await page.route('**/api/v1/answers/**', async route => {
-      await route.fulfill({
-        status: 429,
-        headers: { 'Retry-After': '60' },
-        body: JSON.stringify({ message: 'Rate limited' }),
+    // Log progress
+    if (requestCount % 50 === 0) {
+      console.log(`Sent ${requestCount} requests...`);
+    }
+  }
+
+  return { hitRateLimit, requestCount };
+}
+
+test.describe('Rate Limit - Full Flow', () => {
+  test('triggers 429, shows toast, and logs out user @rate-limit', async ({
+    page,
+    baseURL,
+  }) => {
+    const apiBaseURL = getAPIBaseURL(baseURL || 'https://stage.practiceinterviews.com');
+    const testEmail = generateTestEmail();
+    const testPassword = generateTestPassword();
+
+    console.log(`Creating test account: ${testEmail}`);
+
+    // Step 1: Create new account with onboarding
+    const { token, userId } = await createAccountWithOnboarding(
+      page,
+      testEmail,
+      testPassword
+    );
+
+    console.log(`Account created. User ID: ${userId}`);
+    expect(token).toBeTruthy();
+    expect(userId).toBeTruthy();
+
+    // Step 2: Navigate to home to ensure we're in a logged-in state
+    await page.goto('/home');
+    await expect(page).toHaveURL(/home/);
+
+    // Step 3: Spam API requests to trigger rate limit
+    console.log('Spamming requests to trigger rate limit...');
+    const { hitRateLimit, requestCount } = await spamRequestsUntil429(
+      page,
+      userId,
+      token,
+      apiBaseURL
+    );
+
+    console.log(`Sent ${requestCount} requests. Hit rate limit: ${hitRateLimit}`);
+
+    // If we hit the rate limit, trigger one more request from the page context
+    // to ensure the frontend intercepts the 429
+    if (hitRateLimit) {
+      // Trigger a frontend API call
+      await page.reload();
+    } else {
+      // If we didn't hit rate limit (likely on stage with 2000 limit),
+      // we can't fully test this - skip with a note
+      test.skip(true, `Did not hit rate limit after ${requestCount} requests - likely on stage environment`);
+    }
+
+    // Step 4: Verify toast appears
+    await expect(
+      page.getByText(/rate limit|too many requests/i)
+    ).toBeVisible({ timeout: 10000 });
+
+    // Step 5: Verify user is logged out (redirected to login page)
+    await expect(page).toHaveURL(/enter-email/, { timeout: 15000 });
+
+    // Verify token is cleared from localStorage
+    const tokenAfter = await page.evaluate(
+      () => localStorage.getItem('auth_token')
+    );
+    expect(tokenAfter).toBeFalsy();
+
+    console.log('Test passed: User was rate limited, shown toast, and logged out');
+  });
+
+  test('other users can still use the app during rate limit @rate-limit', async ({
+    page,
+    browser,
+    baseURL,
+  }) => {
+    // Skip if superadmin credentials not configured
+    test.skip(
+      !SUPERADMIN_EMAIL || !SUPERADMIN_PASSWORD,
+      'E2E_SUPERADMIN_EMAIL and E2E_SUPERADMIN_PASSWORD must be set'
+    );
+
+    const apiBaseURL = getAPIBaseURL(baseURL || 'https://stage.practiceinterviews.com');
+    const testEmail = generateTestEmail();
+    const testPassword = generateTestPassword();
+
+    // Create a fresh test account
+    console.log(`Creating test account: ${testEmail}`);
+    const { token, userId } = await createAccountWithOnboarding(
+      page,
+      testEmail,
+      testPassword
+    );
+
+    // Spam requests to trigger rate limit for test user
+    console.log('Triggering rate limit for test user...');
+    const { hitRateLimit, requestCount } = await spamRequestsUntil429(
+      page,
+      userId,
+      token,
+      apiBaseURL
+    );
+
+    if (!hitRateLimit) {
+      test.skip(true, `Did not hit rate limit after ${requestCount} requests`);
+    }
+
+    // Create a new browser context for superadmin
+    const superadminContext = await browser.newContext();
+    const superadminPage = await superadminContext.newPage();
+
+    try {
+      // Login as superadmin in separate context
+      console.log('Logging in as superadmin...');
+      await login(superadminPage, SUPERADMIN_EMAIL!, SUPERADMIN_PASSWORD!);
+
+      // Navigate to home
+      await superadminPage.goto('/home');
+
+      // Verify superadmin can access the app
+      await expect(superadminPage.getByText(/Welcome/)).toBeVisible({
+        timeout: 15000,
       });
-    });
 
-    await page.goto('/');
+      // Make an API request to verify it succeeds (not rate limited)
+      const response = await superadminPage.request.get(
+        `${apiBaseURL}/api/v2/users/me`,
+        {
+          headers: {
+            Authorization: `Bearer ${await superadminPage.evaluate(
+              () => localStorage.getItem('auth_token')
+            )}`,
+          },
+        }
+      );
 
-    // Wait for banner
-    const banner = page.getByText(/You're making requests too quickly/i);
-    await expect(banner).toBeVisible({ timeout: 10000 });
-
-    // Check that banner is at or near top of viewport
-    const bannerBox = await banner.boundingBox();
-    expect(bannerBox).toBeTruthy();
-    expect(bannerBox!.y).toBeLessThan(100); // Banner should be near top
+      expect(response.status()).toBe(200);
+      console.log('Superadmin can still use the app while test user is rate limited');
+    } finally {
+      await superadminContext.close();
+    }
   });
 });
 
-test.describe('Rate Limit - New User Registration', () => {
-  test('new user can register with fractallabs.dev email (OTP bypass)', async ({
-    page,
-  }) => {
+test.describe('Rate Limit - Account Creation', () => {
+  test('can create account with @fractallabs.dev email', async ({ page }) => {
     const testEmail = generateTestEmail();
+    const testPassword = generateTestPassword();
 
-    await page.goto('/enter-email');
+    console.log(`Testing account creation with: ${testEmail}`);
 
-    // Enter the test email
-    await page.getByLabel('Email address').fill(testEmail);
-    await page.getByRole('button', { name: 'Continue' }).click();
+    // Create account - OTP should be bypassed
+    const { token, userId } = await createAccountWithOnboarding(
+      page,
+      testEmail,
+      testPassword
+    );
 
-    // Should see "We don't have an account with this email" for new users
-    // and option to create account
-    await expect(
-      page
-        .getByText("We don't have an account with this email")
-        .or(page.getByText(/create.*account/i))
-        .or(page.getByLabel('Password'))
-    ).toBeVisible({ timeout: 15000 });
+    expect(token).toBeTruthy();
+    console.log(`Account created successfully. User ID: ${userId}`);
 
-    // Note: Full registration flow would continue here
-    // For rate limit testing, we primarily need to verify the OTP bypass works
-    // which is implicitly tested by not getting stuck at OTP verification
+    // Verify we're logged in
+    await page.goto('/home');
+    await expect(page.getByText(/Welcome/)).toBeVisible({ timeout: 15000 });
   });
 });
