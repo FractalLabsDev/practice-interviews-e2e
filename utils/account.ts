@@ -22,116 +22,232 @@ export function generateTestPassword(): string {
 }
 
 /**
+ * Step 1: Navigate to sign-up flow from email entry
+ * Enters email, clicks Continue, then clicks "Sign up instead"
+ */
+async function navigateToSignUp(page: Page, email: string): Promise<void> {
+  await page.goto('/enter-email');
+  await page.getByLabel('Email address').fill(email);
+  await page.getByRole('button', { name: 'Continue' }).click();
+
+  // Wait for the "We don't have an account" error message to appear
+  await expect(
+    page.getByText("We don't have an account with this email")
+  ).toBeVisible({ timeout: 15000 });
+
+  // Click "Sign up instead" button to proceed with account creation
+  const signUpInsteadBtn = page.getByRole('button', { name: /sign up instead/i });
+  await expect(signUpInsteadBtn).toBeVisible({ timeout: 5000 });
+  await signUpInsteadBtn.click();
+
+  // Wait for navigation to onboarding basic info page
+  await expect(page).toHaveURL(/onboarding-basic-info/, { timeout: 10000 });
+}
+
+/**
+ * Step 2: Fill basic info (name and email) on onboarding-basic-info page
+ * The page has two text fields: first name (placeholder) and email (placeholder)
+ */
+async function fillBasicInfo(page: Page, firstName: string, email: string): Promise<void> {
+  // Wait for the onboarding basic info page
+  await expect(page).toHaveURL(/onboarding-basic-info/, { timeout: 10000 });
+
+  // Fill first name field (placeholder: "Enter your first name")
+  const firstNameInput = page.getByPlaceholder(/enter your first name/i);
+  await expect(firstNameInput).toBeVisible({ timeout: 10000 });
+  await firstNameInput.fill(firstName);
+
+  // Fill email field (placeholder: "Enter your email")
+  // Wait a bit for email validation to complete
+  const emailInput = page.getByPlaceholder(/enter your email/i);
+  await expect(emailInput).toBeVisible({ timeout: 5000 });
+  await emailInput.fill(email);
+  
+  // Wait for email validation to complete (check if email exists)
+  await page.waitForTimeout(1000);
+
+  // Click Continue button
+  const continueBtn = page.getByRole('button', { name: /continue/i });
+  await expect(continueBtn).toBeEnabled({ timeout: 5000 });
+  await continueBtn.click();
+
+  // Wait for navigation to create account page
+  await expect(page).toHaveURL(/onboarding-create-account/, { timeout: 10000 });
+}
+
+/**
+ * Step 3: Create password on onboarding-create-account page
+ * The page has two password fields: "Create password" and "Confirm password"
+ */
+async function createPassword(page: Page, password: string): Promise<void> {
+  // Wait for the create account page
+  await expect(page).toHaveURL(/onboarding-create-account/, { timeout: 10000 });
+
+  // Fill password field (label: "Create password")
+  const passwordInput = page.getByLabel(/create password/i);
+  await expect(passwordInput).toBeVisible({ timeout: 10000 });
+  await passwordInput.fill(password);
+
+  // Fill confirm password field (label: "Confirm password")
+  const confirmPasswordInput = page.getByLabel(/confirm password/i);
+  await expect(confirmPasswordInput).toBeVisible({ timeout: 5000 });
+  await confirmPasswordInput.fill(password);
+
+  // Click "Create account" button
+  const createAccountBtn = page.getByRole('button', { name: /create account/i });
+  await expect(createAccountBtn).toBeVisible({ timeout: 5000 });
+  await createAccountBtn.click();
+
+  // Wait for account creation to complete and navigate to field/role selection
+  await expect(page).toHaveURL(/onboarding-field-role/, { timeout: 15000 });
+}
+
+/**
+ * Step 4: Select field and role on onboarding-field-role page
+ * First selects a field (chips), clicks Confirm, then selects a role (chips), clicks Confirm
+ */
+async function selectFieldAndRole(page: Page): Promise<void> {
+  // Wait for the field/role selection page
+  await expect(page).toHaveURL(/onboarding-field-role/, { timeout: 10000 });
+
+  // Step 4a: Select a field
+  // Wait for field selection UI to appear
+  await expect(page.getByText(/what field are you interviewing/i)).toBeVisible({ 
+    timeout: 10000 
+  });
+
+  // Find and click the first field chip
+  // Fields are displayed as Chips (buttons) with text like "Software Engineering", "Product Management", etc.
+  const fieldChips = page.locator('button, [role="button"]').filter({ 
+    hasText: /software|product|data|design|sales|marketing|other/i 
+  });
+  
+  const firstFieldChip = fieldChips.first();
+  await expect(firstFieldChip).toBeVisible({ timeout: 10000 });
+  await firstFieldChip.click();
+  await page.waitForTimeout(500);
+
+  // Click Confirm button for field selection
+  const confirmFieldBtn = page.getByRole('button', { name: /^confirm$/i });
+  await expect(confirmFieldBtn).toBeVisible({ timeout: 5000 });
+  await confirmFieldBtn.click();
+
+  // Wait for role selection UI to appear
+  await expect(page.getByText(/what role specifically/i)).toBeVisible({ 
+    timeout: 5000 
+  });
+  await page.waitForTimeout(500);
+
+  // Step 4b: Select a role
+  // Check if "Other" field was selected - if so, there will be a text input
+  const customRoleInput = page.getByPlaceholder(/enter your role/i);
+  if (await customRoleInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+    // Custom role input for "Other" field
+    await customRoleInput.fill('Test Role');
+    const confirmRoleBtn = page.getByRole('button', { name: /^confirm$/i });
+    await expect(confirmRoleBtn).toBeVisible({ timeout: 5000 });
+    await confirmRoleBtn.click();
+  } else {
+    // Select first role chip
+    // Roles are also displayed as chips - find the first clickable chip
+    const roleChips = page.locator('button, [role="button"]')
+      .filter({ hasText: /.+/ })
+      .filter({ hasNotText: /confirm|back/i });
+    
+    const firstRoleChip = roleChips.first();
+    await expect(firstRoleChip).toBeVisible({ timeout: 5000 });
+    await firstRoleChip.click();
+    await page.waitForTimeout(500);
+
+    // Click Confirm button for role selection
+    const confirmRoleBtn = page.getByRole('button', { name: /^confirm$/i });
+    await expect(confirmRoleBtn).toBeVisible({ timeout: 5000 });
+    await confirmRoleBtn.click();
+  }
+
+  // Wait for navigation to verification code page
+  await expect(page).toHaveURL(/enter-verification-code/, { timeout: 15000 });
+}
+
+/**
+ * Step 5: Handle OTP verification (should be bypassed for @fractallabs.dev emails)
+ * If OTP input appears, enter code and verify
+ */
+async function handleOTPVerification(page: Page): Promise<void> {
+  // Wait for verification code page or check if already authenticated
+  await page.waitForTimeout(2000);
+
+  const otpInput = page.getByLabel(/verification code|code|otp/i);
+  if (await otpInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+    // Enter any code - should be bypassed for fractallabs.dev emails
+    await otpInput.fill('123456');
+    const verifyBtn = page.getByRole('button', { name: /verify|continue/i });
+    if (await verifyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await verifyBtn.click();
+    }
+  }
+
+  // Wait for successful authentication and navigation away from verification page
+  await expect(page).not.toHaveURL(/enter-verification-code/, {
+    timeout: 20000,
+  });
+}
+
+/**
+ * Step 6: Skip practice question if presented
+ */
+async function skipPracticeQuestion(page: Page): Promise<void> {
+  // Look for skip button or practice question indicators
+  const skipBtn = page.getByRole('button', { name: /skip/i });
+  if (await skipBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await skipBtn.click();
+    await page.waitForTimeout(1000);
+  }
+}
+
+/**
  * Create a new account and complete minimum onboarding
  *
- * Steps:
- * 1. Enter email → triggers "new user" flow
- * 2. Enter name
- * 3. Select field/role
- * 4. Create password
- * 5. Skip TMAY question (don't answer to save AI credits)
+ * Flow:
+ * 1. Enter email → click "Sign up instead" → onboarding-basic-info
+ * 2. Fill name + email → click Continue → onboarding-create-account
+ * 3. Create password → click "Create account" → onboarding-field-role
+ * 4. Select field → click Confirm → select role → click Confirm → enter-verification-code
+ * 5. Handle OTP (bypassed for @fractallabs.dev) → onboarding-practice or home
+ * 6. Skip practice question if needed
  *
- * Returns the auth token from localStorage
+ * Returns the auth token and user ID from localStorage
  */
 export async function createAccountWithOnboarding(
   page: Page,
   email: string,
   password: string
 ): Promise<{ token: string; userId: string }> {
-  // Step 1: Enter email
-  await page.goto('/enter-email');
-  await page.getByLabel('Email address').fill(email);
-  await page.getByRole('button', { name: 'Continue' }).click();
+  const firstName = 'E2E Test';
 
-  // Should see "We don't have an account" message or new user flow
-  await expect(
-    page
-      .getByText("We don't have an account with this email")
-      .or(page.getByText(/create.*account/i))
-      .or(page.getByText('Welcome'))
-      .or(page.getByRole('button', { name: /create/i }))
-  ).toBeVisible({ timeout: 15000 });
+  // Step 1: Navigate to sign-up flow
+  await navigateToSignUp(page, email);
 
-  // Click "Create Account" or similar if visible
-  const createAccountBtn = page.getByRole('button', { name: /create account/i });
-  if (await createAccountBtn.isVisible().catch(() => false)) {
-    await createAccountBtn.click();
-  }
+  // Step 2: Fill basic info (name and email)
+  await fillBasicInfo(page, firstName, email);
 
-  // Step 2: Basic info - enter name
-  // Wait for name input or onboarding screen
-  const firstNameInput = page.getByLabel(/first name/i);
-  const nameInput = page.getByLabel(/name/i).first();
+  // Step 3: Create password
+  await createPassword(page, password);
 
-  if (await firstNameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await firstNameInput.fill('E2E');
-    const lastNameInput = page.getByLabel(/last name/i);
-    if (await lastNameInput.isVisible().catch(() => false)) {
-      await lastNameInput.fill('Test');
-    }
-  } else if (await nameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await nameInput.fill('E2E Test');
-  }
+  // Step 4: Select field and role
+  await selectFieldAndRole(page);
 
-  // Click Continue/Next
-  const continueBtn = page
-    .getByRole('button', { name: /continue|next/i })
-    .first();
-  if (await continueBtn.isVisible().catch(() => false)) {
-    await continueBtn.click();
-  }
+  // Step 5: Handle OTP verification
+  await handleOTPVerification(page);
 
-  // Step 3: Field/Role selection - select first available option
-  await page.waitForTimeout(1000);
-  const fieldOption = page.locator('[role="button"], [role="option"]').first();
-  if (await fieldOption.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await fieldOption.click();
-    await page.waitForTimeout(500);
-    const nextBtn = page.getByRole('button', { name: /continue|next/i }).first();
-    if (await nextBtn.isVisible().catch(() => false)) {
-      await nextBtn.click();
-    }
-  }
-
-  // Step 4: Create password
-  const passwordInput = page.getByLabel(/password/i).first();
-  await expect(passwordInput).toBeVisible({ timeout: 10000 });
-  await passwordInput.fill(password);
-
-  const confirmPasswordInput = page.getByLabel(/confirm password/i);
-  if (await confirmPasswordInput.isVisible().catch(() => false)) {
-    await confirmPasswordInput.fill(password);
-  }
-
-  // Submit password form
-  const submitBtn = page.getByRole('button', { name: /create|sign up|continue/i }).first();
-  await submitBtn.click();
-
-  // Step 5: OTP verification (should be bypassed for @fractallabs.dev)
-  // Wait for OTP screen or direct redirect
-  await page.waitForTimeout(2000);
-
-  const otpInput = page.getByLabel(/code|otp|verification/i);
-  if (await otpInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-    // Enter any code - should be bypassed for fractallabs.dev emails
-    await otpInput.fill('123456');
-    const verifyBtn = page.getByRole('button', { name: /verify|continue/i });
-    if (await verifyBtn.isVisible().catch(() => false)) {
-      await verifyBtn.click();
-    }
-  }
+  // Step 6: Skip practice question if presented
+  await skipPracticeQuestion(page);
 
   // Wait for successful account creation / onboarding completion
   // Should redirect to home or practice question
-  await expect(page).not.toHaveURL(/enter-email|create-account|verification-code/, {
+  await expect(page).not.toHaveURL(/enter-email|onboarding-basic-info|onboarding-create-account|enter-verification-code/, {
     timeout: 20000,
   });
-
-  // Skip TMAY question if presented - look for skip button or navigate away
-  const skipBtn = page.getByRole('button', { name: /skip/i });
-  if (await skipBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await skipBtn.click();
-  }
 
   // Get auth token from localStorage
   const token = await page.evaluate(() => localStorage.getItem('auth_token'));
